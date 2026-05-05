@@ -39,8 +39,8 @@ fi
 
 echo "[1/6] Installing Python dependencies..."
 "$PY" -m pip install --user --quiet \
-    PyQt5 sounddevice numpy pynput \
-    pyobjc-framework-Quartz pyobjc-framework-AVFoundation \
+    PyQt5 sounddevice numpy \
+    pyobjc-framework-Cocoa pyobjc-framework-Quartz pyobjc-framework-AVFoundation \
     py2app
 
 echo "[2/6] Installing SSL certificates..."

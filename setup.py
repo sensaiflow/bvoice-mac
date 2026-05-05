@@ -11,7 +11,7 @@ OPTIONS = {
         'NSMicrophoneUsageDescription': 'BVoice needs microphone access for voice input.',
     },
     'packages': ['numpy', 'sounddevice'],
-    'includes': ['AVFoundation', 'Quartz', 'AppKit'],
+    'includes': ['AVFoundation', 'Quartz', 'AppKit', 'Cocoa', 'Foundation'],
 }
 
 setup(
