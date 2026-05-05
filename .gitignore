@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# py2app build artifacts
+build/
+dist/
+*.egg-info/
+
+# Distributable DMG (rebuild via build-dmg.sh)
+*.dmg
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS metadata
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp

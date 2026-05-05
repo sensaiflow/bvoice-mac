@@ -1,0 +1,11 @@
+{
+  "mode": "own",
+  "hotkey_mac_vk": 63,
+  "hotkey_name": "fn",
+  "languages": [
+    "ru",
+    "en"
+  ],
+  "language": "ru",
+  "hotkey_lang_change_name": "shift"
+}
