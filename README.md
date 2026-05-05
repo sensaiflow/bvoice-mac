@@ -18,18 +18,19 @@ REQUIREMENTS:
 - Микрофон
 
 УСТАНОВКА:
-  1. bash install.sh
-  2. Создайте файл .env с одной строкой:
-       OPENAI_API_KEY=sk-...ваш-ключ...
-  3. open ~/Applications/BVoice.app
-  4. Разрешить в System Settings → Privacy & Security:
+  1. Клонируйте репозиторию в свою локальную папку.
+  2. Создайте файл .env с OPENAI_API_KEY=sk-...ваш-ключ...
+  3. bash install.sh
+  4. open ~/Applications/BVoice.app
+  5. Разрешить в System Settings → Privacy & Security:
      - Input Monitoring → +, добавить ~/Applications/BVoice.app, тумблер ON
      - Accessibility → +, добавить ~/Applications/BVoice.app, тумблер ON
-  5. При первом разговоре всплывет окно с запросом на разрешение для микрофона, нужно нажать Allow
+
+     ps: используйте команду CMD + SHIFT + G, чтобы проще найти папки
+  6. При первом разговоре всплывет окно с запросом на разрешение для микрофона, нужно нажать Allow
 
 ЯЗЫКИ:
-- Текущий язык переключается через tray-меню BVoice → Language
-- Хоткей переключения: Fn + Control (по умолчанию). Меняется в Settings GUI
+- Переключение языков : Fn + Control (по умолчанию). Меняется в Settings GUI
   или вручную в config.json (поле "hotkey_lang_change_name":
   "control" / "shift" / "option" / "command" / "" — отключить).
 
@@ -46,9 +47,6 @@ REQUIREMENTS:
 - Конфиг:       ~/BVoice/config.json
 - Записи:        ~/BVoice/audio_history/  (.wav + .txt)
 - Логи:          /tmp/bvoice.log
-
-ПОДСКАЗКА:
- - Чтобы сразу открыть папки хранения в FINDER: CMD + SHIFT + G
 
 COST: ~$0.006/min аудио (тарификация OpenAI Whisper)
 
