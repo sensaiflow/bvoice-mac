@@ -261,6 +261,12 @@ class AudioRecorder:
 
         return audio_path
 
+    def cancel(self):
+        self.recording = False
+        if hasattr(self, '_rec_thread'):
+            self._rec_thread.join(timeout=3)
+        self.frames = []
+
 
 # ── Whisper API ─────────────────────────────────────────────
 
@@ -516,6 +522,7 @@ class Signals(QObject):
     history_added = pyqtSignal(str, str, str)  # timestamp, audio_path, text
     start_rec = pyqtSignal()
     stop_rec = pyqtSignal()
+    cancel_rec = pyqtSignal()
     cycle_lang = pyqtSignal()
 
 
@@ -654,18 +661,22 @@ class HistoryItemWidget(QWidget):
         layout = QHBoxLayout()
         layout.setContentsMargins(4, 2, 4, 2)
 
-        # Play button
+        has_audio = os.path.exists(audio_path)
+
+        # Play button (only when WAV is still present)
         self.btn_play = QPushButton('▶')
         self.btn_play.setFixedSize(30, 26)
         self.btn_play.setToolTip('Play audio')
         self.btn_play.clicked.connect(self._play)
+        self.btn_play.setVisible(has_audio)
         layout.addWidget(self.btn_play)
 
-        # Re-transcribe button
+        # Re-transcribe button (needs WAV)
         btn_retrans = QPushButton('↻')
         btn_retrans.setFixedSize(30, 26)
         btn_retrans.setToolTip('Re-transcribe')
         btn_retrans.clicked.connect(self._retranscribe)
+        btn_retrans.setVisible(has_audio)
         layout.addWidget(btn_retrans)
 
         # Timestamp
@@ -1132,21 +1143,34 @@ class BVoiceMainWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
-        for fname in sorted(os.listdir(AUDIO_HISTORY_DIR), reverse=True):
-            if not fname.endswith('.wav'):
+        # Iterate over .txt files — WAVs are deleted after successful transcription
+        # but a few may linger (failed transcription / older history).
+        seen = set()
+        entries = []
+        for fname in os.listdir(AUDIO_HISTORY_DIR):
+            if fname.endswith('.txt'):
+                stem = fname[:-4]
+            elif fname.endswith('.wav'):
+                stem = fname[:-4]
+            else:
                 continue
-            audio_path = os.path.join(AUDIO_HISTORY_DIR, fname)
-            txt_path = audio_path.replace('.wav', '.txt')
+            if stem in seen:
+                continue
+            seen.add(stem)
+            entries.append(stem)
+
+        for stem in sorted(entries, reverse=True):
+            txt_path = os.path.join(AUDIO_HISTORY_DIR, stem + '.txt')
+            audio_path = os.path.join(AUDIO_HISTORY_DIR, stem + '.wav')
             text = ''
             if os.path.exists(txt_path):
                 with open(txt_path, 'r', encoding='utf-8') as f:
                     text = f.read().strip()
-            ts = fname.replace('.wav', '')
             try:
-                dt = datetime.datetime.strptime(ts, '%Y%m%d_%H%M%S')
+                dt = datetime.datetime.strptime(stem, '%Y%m%d_%H%M%S')
                 display_ts = dt.strftime('%H:%M:%S')
             except ValueError:
-                display_ts = ts
+                display_ts = stem
             widget = HistoryItemWidget(audio_path, txt_path, text, display_ts, self.app_ref, self)
             self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, widget)
 
@@ -1306,10 +1330,11 @@ class TapDetector:
     DOUBLE_TAP_THRESHOLD = 0.4  # seconds
 
     def __init__(self, on_start, on_stop, is_recording_fn, scan_code=41,
-                 on_cycle_lang=None):
+                 on_cycle_lang=None, on_cancel=None):
         self.on_start = on_start
         self.on_stop = on_stop
         self.on_cycle_lang = on_cycle_lang
+        self.on_cancel = on_cancel
         self.is_recording = is_recording_fn
         self.scan_code = scan_code
         self.last_tap_time = 0
@@ -1384,6 +1409,14 @@ class TapDetector:
                         if not is_repeat:
                             self._handle_tap()
                     return None  # suppress hotkey
+                # Escape (vk=53) while recording — cancel without sending.
+                if vk == 53 and self.on_cancel and self.is_recording():
+                    if event_type == Quartz.kCGEventKeyDown:
+                        is_repeat = Quartz.CGEventGetIntegerValueField(
+                            event, Quartz.kCGKeyboardEventAutorepeat)
+                        if not is_repeat:
+                            self.on_cancel()
+                    return None  # swallow Esc so it doesn't reach the focused app
             return event
 
         mask = (Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
@@ -1593,6 +1626,7 @@ class WhisperApp:
         self.signals.history_added.connect(self.history_window.add_entry)
         self.signals.start_rec.connect(self.start_recording)
         self.signals.stop_rec.connect(self.stop_recording)
+        self.signals.cancel_rec.connect(self.cancel_recording)
         self.signals.cycle_lang.connect(self._cycle_language)
 
         # Kill AquaVoice — it steals the Ё key via its own CGEventTap
@@ -1614,6 +1648,7 @@ class WhisperApp:
             is_recording_fn=lambda: self.is_recording,
             scan_code=scan_code,
             on_cycle_lang=lambda: self.signals.cycle_lang.emit(),
+            on_cancel=lambda: self.signals.cancel_rec.emit(),
         )
         self.tap_detector.start()
 
@@ -1694,6 +1729,12 @@ class WhisperApp:
                     with open(txt_path, 'w', encoding='utf-8') as f:
                         f.write(text)
 
+                    # Drop the WAV — text is in .txt and history reads from there.
+                    try:
+                        os.remove(audio_path)
+                    except OSError:
+                        pass
+
                     self.last_text = text
                     self.action_insert_last.setEnabled(True)
                     print(f'[whisper] "{text}"')
@@ -1711,6 +1752,17 @@ class WhisperApp:
                 self.signals.status_changed.emit('error', str(e)[:30])
 
         threading.Thread(target=process, daemon=True).start()
+
+    def cancel_recording(self):
+        if not self.is_recording:
+            return
+        print('[whisper] >>> CANCEL RECORDING')
+        self.is_recording = False
+        try:
+            self.recorder.cancel()
+        except Exception as e:
+            print(f'[whisper] Cancel error: {e}')
+        self.signals.status_changed.emit('idle', '')
 
     def _show_history(self):
         self.main_window._load_history()
