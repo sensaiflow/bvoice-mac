@@ -9,7 +9,7 @@ Single instance — не запускается больше одного.
 (c) MadTwinz 2026
 """
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 APP_NAME = "BVoice"
 APP_ABOUT = f"""{APP_NAME} v{APP_VERSION}
 
@@ -529,20 +529,22 @@ class Signals(QObject):
 # ── Overlay Dot (minimal, no blinking) ──────────────────────
 
 class OverlayBar(QWidget):
-    SIZE = 30
-    DOT_R = 10
+    WIDTH = 70
+    HEIGHT = 30
+    DOT_R = 9
 
     # Muted hacker green
     COLOR_IDLE = QColor(80, 80, 80, 180)
     COLOR_REC = QColor(0, 200, 50, 230)
     COLOR_ARC = QColor(0, 120, 35, 180)
     COLOR_ERR = QColor(120, 20, 20, 180)
+    COLOR_LANG = QColor(220, 220, 220, 200)
 
     def __init__(self):
         super().__init__()
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-            | Qt.BypassWindowManagerHint
+            | Qt.BypassWindowManagerHint | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -550,6 +552,7 @@ class OverlayBar(QWidget):
 
         self.status = 'idle'
         self.arc_angle = 360  # for snake ring animation
+        self.language_text = ''
         self._position_bottom_center()
 
         self.arc_timer = QTimer()
@@ -557,31 +560,72 @@ class OverlayBar(QWidget):
 
         if _IS_MAC:
             QTimer.singleShot(100, self._set_mac_window_level)
+            self._level_timer = QTimer(self)
+            self._level_timer.timeout.connect(self._set_mac_window_level)
+            self._level_timer.start(2000)
+
+    def _ns_window(self):
+        """Resolve our exact NSWindow via the Qt winId (NSView pointer)."""
+        try:
+            import objc
+            view = objc.objc_object(c_void_p=int(self.winId()))
+            return view.window()
+        except Exception as e:
+            print(f'[whisper] NSWindow resolve error: {e}')
+            return None
 
     def _set_mac_window_level(self):
+        if not self.isVisible():
+            return
+        w = self._ns_window()
+        if w is None:
+            return
         try:
-            from AppKit import NSApp
-            for w in NSApp.windows():
-                if w.frame().size.height <= 35:
-                    w.setLevel_(25)  # above all apps
-                    w.setCollectionBehavior_((1 << 0) | (1 << 4))
+            # NonactivatingPanel (1<<7=128) — utility-style panel that never
+            # takes focus and is allowed above fullscreen apps.
+            try:
+                cur_mask = int(w.styleMask())
+                w.setStyleMask_(cur_mask | (1 << 7))
+            except Exception:
+                pass
+
+            # MoveToActiveSpace (1<<1) — window jumps to whichever Space
+            # the user is currently on (incl. another app's fullscreen Space).
+            # FullScreenAuxiliary (1<<8) — allowed in fullscreen Spaces.
+            # IgnoresCycle (1<<6) — out of Cmd-Tab.
+            behavior = (1 << 1) | (1 << 8) | (1 << 6)
+            try:
+                from Quartz import CGShieldingWindowLevel
+                target_level = int(CGShieldingWindowLevel())
+            except Exception:
+                target_level = 1000
+
+            w.setLevel_(target_level)
+            w.setCollectionBehavior_(behavior)
+            w.setHidesOnDeactivate_(False)
+            w.orderFront_(None)
         except Exception as e:
             print(f'[whisper] NSWindow level error: {e}')
 
     def _position_bottom_center(self):
         screen = QApplication.primaryScreen().availableGeometry()
-        x = (screen.width() - self.SIZE) // 2
-        y = screen.height() - self.SIZE - 12
-        self.setGeometry(x, y, self.SIZE, self.SIZE)
+        x = (screen.width() - self.WIDTH) // 2
+        y = screen.height() - self.HEIGHT - 12
+        self.setGeometry(x, y, self.WIDTH, self.HEIGHT)
+
+    def set_language(self, code):
+        self.language_text = (code or 'auto').upper()
+        self.update()
 
     def paintEvent(self, event):
-        from PyQt5.QtGui import QPen
+        from PyQt5.QtGui import QPen, QFont
+        from PyQt5.QtCore import QRect
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        cx = self.width() / 2
-        cy = self.height() / 2
         r = self.DOT_R
+        cx = r + 6
+        cy = self.height() / 2
 
         if self.status == 'idle':
             painter.setPen(Qt.NoPen)
@@ -589,13 +633,11 @@ class OverlayBar(QWidget):
             painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
         elif self.status == 'listening':
-            # Muted dark green, no blinking — just solid
             painter.setPen(Qt.NoPen)
             painter.setBrush(self.COLOR_REC)
             painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
 
         elif self.status == 'processing':
-            # Gray dot + green arc ring that shrinks (snake)
             painter.setPen(Qt.NoPen)
             painter.setBrush(self.COLOR_IDLE)
             painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
@@ -604,16 +646,20 @@ class OverlayBar(QWidget):
                 pen = QPen(self.COLOR_ARC, 2.5)
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
-                arc_rect = Qt.QRect if hasattr(Qt, 'QRect') else None
-                from PyQt5.QtCore import QRect
                 rect = QRect(int(cx - r - 3), int(cy - r - 3), int((r + 3) * 2), int((r + 3) * 2))
-                # drawArc: angles in 1/16th degree, start at top (90°)
                 painter.drawArc(rect, 90 * 16, self.arc_angle * 16)
 
         elif self.status == 'error':
             painter.setPen(Qt.NoPen)
             painter.setBrush(self.COLOR_ERR)
             painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
+
+        if self.language_text:
+            painter.setPen(QPen(self.COLOR_LANG))
+            font = QFont('Helvetica', 10, QFont.Bold)
+            painter.setFont(font)
+            text_rect = QRect(int(cx + r + 4), 0, self.width() - int(cx + r + 4) - 2, self.height())
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self.language_text)
 
     def set_status(self, status, message=''):
         self.status = status
@@ -628,7 +674,30 @@ class OverlayBar(QWidget):
         elif status == 'done':
             self.status = 'idle'
 
+        if self.status == 'idle':
+            self.hide()
+        else:
+            self._show_on_top()
+
         self.update()
+
+    def _show_on_top(self):
+        if not self.isVisible():
+            self.show()
+        if _IS_MAC:
+            self._set_mac_window_level()
+
+    def flash_language(self, duration_ms=1500):
+        """Briefly surface the overlay (e.g. on language switch) then hide."""
+        self._show_on_top()
+        if not hasattr(self, '_flash_timer') or self._flash_timer is None:
+            self._flash_timer = QTimer(self)
+            self._flash_timer.setSingleShot(True)
+            self._flash_timer.timeout.connect(
+                lambda: self.hide() if self.status == 'idle' else None
+            )
+        self._flash_timer.stop()
+        self._flash_timer.start(duration_ms)
 
     def _tick_arc(self):
         self.arc_angle -= 10
@@ -1532,17 +1601,9 @@ class WhisperApp:
         if os.path.exists(icon_path):
             self.qt_app.setWindowIcon(QIcon(icon_path))
 
-        # Overlay
+        # Overlay — hidden by default; surfaces only during record/processing
+        # or briefly on language switch.
         self.overlay = OverlayBar()
-        self.overlay.show()
-        if _IS_MAC:
-            try:
-                from AppKit import NSApp
-                for w in NSApp.windows():
-                    if w.frame().size.height <= 30:
-                        w.setCollectionBehavior_(1 << 0)  # canJoinAllSpaces
-            except Exception:
-                pass
 
         # History + Settings windows
         self.main_window = BVoiceMainWindow(self)
@@ -1596,6 +1657,7 @@ class WhisperApp:
 
         self.lang_menu = self.tray_menu.addMenu('Language')
         self.language = default_lang
+        self.overlay.set_language(default_lang)
         for entry in lang_list:
             if isinstance(entry, dict):
                 code = entry.get('code', '')
@@ -1802,6 +1864,10 @@ class WhisperApp:
             a.setChecked(False)
         if action:
             action.setChecked(True)
+        try:
+            self.overlay.set_language(code)
+        except Exception:
+            pass
         print(f'[whisper] Language set to: {code or "auto"}')
 
     def _cycle_language(self):
@@ -1825,9 +1891,9 @@ class WhisperApp:
             ] if l == label), label
         )
         self._set_language(code, next_action)
-        # Brief on-screen feedback
+        # Brief on-screen feedback — flash overlay for ~1.5s.
         try:
-            self.signals.status_changed.emit('done', f'Lang: {label}')
+            self.overlay.flash_language(1500)
         except Exception:
             pass
 
